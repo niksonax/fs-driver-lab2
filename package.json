@@ -1,0 +1,12 @@
+{
+  "name": "fs-driver-lab2",
+  "version": "1.0.0",
+  "description": "File system driver",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Mykyta Kanyuka <nik2142ua@gmail.com>",
+  "license": "ISC"
+}
