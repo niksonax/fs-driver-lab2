@@ -1,3 +1,5 @@
+import { getInt24ToBytes } from '../helpers/helpers.js';
+
 class FileDescriptor {
   constructor(
     fileSize,
@@ -40,12 +42,29 @@ class FileDescriptor {
     this.blockAddress2 = bytes[6];
     this.blockMapAddress = bytes[7];
   }
+
+  toBytes() {
+    const buffer = Buffer.alloc(8);
+
+    const sizeBytes = getInt24ToBytes(this.fileSize);
+
+    buffer[0] = this.fileType;
+    buffer[1] = sizeBytes[0];
+    buffer[2] = sizeBytes[1];
+    buffer[3] = sizeBytes[2];
+    buffer[4] = this.hardLinksCount;
+    buffer[5] = this.blockAddress1;
+    buffer[6] = this.blockAddress2;
+    buffer[7] = this.blockMapAddress;
+
+    return buffer;
+  }
 }
 
 const TYPES = {
   REGULAR: 0,
   DIRECTORY: 1,
-  UNUSED: -1,
+  UNUSED: 255,
 };
 
 export default FileDescriptor;
