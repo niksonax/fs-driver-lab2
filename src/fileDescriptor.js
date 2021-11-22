@@ -33,7 +33,7 @@ class FileDescriptor {
     }
     // this.fileType = bytes[0]
 
-    const size = (bytes[1] << (16 + bytes[2])) << (8 + bytes[3]);
+    const size = (bytes[1] << 16) + (bytes[2] << 8) + bytes[3];
     this.fileSize = size;
 
     this.hardLinksCount = bytes[4];

@@ -7,7 +7,7 @@ class DirectoryEntry {
   }
 
   fromBytes(bytes) {
-    this.name = bytes.subarray(0, 28).toString();
+    this.name = bytes.subarray(0, bytes.indexOf(0)).toString();
     this.fileDescriptorId = getInt32FromBytes(bytes.subarray(28, 32));
   }
 

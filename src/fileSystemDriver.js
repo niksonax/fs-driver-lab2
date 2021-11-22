@@ -38,8 +38,6 @@ class FileSystemDriver {
 
     const bytesN = getInt32ToBytes(n);
 
-    console.log(bytesN);
-
     buffer[252] = bytesN[0];
     buffer[253] = bytesN[1];
     buffer[254] = bytesN[2];
@@ -65,7 +63,6 @@ class FileSystemDriver {
         buffer.subarray(i * BLOCK_SIZE, (i + 1) * BLOCK_SIZE)
       );
     }
-    console.log(this.blockDevice.read(0).subarray(250));
   }
 
   mount() {}
