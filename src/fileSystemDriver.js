@@ -76,7 +76,7 @@ class FileSystemDriver {
 
     const dirEntries = [];
 
-    for (let block = blocks.next(); !block.done; block = block.next()) {
+    for (let block = blocks.next(); !block.done; block = blocks.next()) {
       const blockData = this.blockDevice.read(block.value);
 
       for (let i = 0; i < BLOCK_SIZE / 32; i++) {
@@ -223,6 +223,18 @@ class FileSystemDriver {
     }
   }
 
+  *blockMaps(fileDescriptor) {
+    let blockMapAddress = fileDescriptor.blockMapAddress;
+
+    while (blockMapAddress) {
+      yield blockMapAddress;
+
+      const blockMap = this.blockDevice.read(blockMapAddress);
+
+      blockMapAddress = blockMap[blockMap.length - 1];
+    }
+  }
+
   getFreeBlockId() {
     const buffer = this.blockDevice.read(0).subarray(0, 252);
 
@@ -265,6 +277,11 @@ class FileSystemDriver {
     this.blockDevice.write(0, buffer);
   }
 
+  cleanBlock(blockId) {
+    const cleanBlock = Buffer.alloc(BLOCK_SIZE);
+    this.blockDevice.write(blockId, cleanBlock);
+  }
+
   addLink(directoryDescriptorId, fileDescriptorId, fileName) {
     const directory = this.getDescriptor(directoryDescriptorId);
     const dirEntries = this.ls(directory);
@@ -277,22 +294,94 @@ class FileSystemDriver {
 
     const dirEntry = new DirectoryEntry(fileName, fileDescriptorId);
 
-    if (directory.blockAddress1 === 0) {
-      directory.blockAddress1 = this.getFreeBlockId();
-      directory.fileSize += 32;
+    // more logic...
+    const dirEntriesCount = directory.fileSize / 32;
+    const dirEntryAddressInBlock = dirEntriesCount % 8;
 
-      let blockData = Buffer.alloc(BLOCK_SIZE);
+    // need to create new block for a directory
+    if (dirEntryAddressInBlock === 0) {
+      const freeBlockId = this.getFreeBlockId();
+      this.cleanBlock(freeBlockId);
+      this.setBlockUsed(freeBlockId);
 
-      const blockDataArr = Array.from(blockData);
-      blockDataArr.splice(0, 8, ...dirEntry.toBytes());
-      blockData = Buffer.from(blockDataArr);
+      if (directory.blockAddress1 === 0) {
+        directory.blockAddress1 = freeBlockId;
+        this.updateDescriptor(directoryDescriptorId, directory);
+      } else if (directory.blockAddress2 === 0) {
+        directory.blockAddress2 = freeBlockId;
+        this.updateDescriptor(directoryDescriptorId, directory);
+      } else if (directory.blockMapAddress === 0) {
+        directory.blockMapAddress = this.getFreeBlockId();
+        this.setBlockUsed(directory.blockMapAddress);
+        this.updateDescriptor(directoryDescriptorId, directory);
+        this.cleanBlock(directory.blockMapAddress);
 
-      this.blockDevice.write(directory.blockAddress1, blockData);
+        let blockData = Buffer.alloc(BLOCK_SIZE);
 
-      this.updateDescriptor(directoryDescriptorId, directory);
+        blockData = Buffer.alloc(BLOCK_SIZE);
+        blockData[0] = freeBlockId;
+
+        this.blockDevice.write(directory.blockMapAddress, blockData);
+      } else {
+        const blocksInDirCount = Math.ceil(dirEntriesCount / 8); // 8 - blocks in dir
+        const blockMapsCount = Math.ceil((blocksInDirCount - 2) / 255);
+        const blocksInLastBlockMap = (blocksInDirCount - 2) % 255;
+
+        let blockMapAddress = 0;
+        let dirMaps = this.blockMaps(directory);
+
+        for (
+          let nextBlockMap = dirMaps.next();
+          !nextBlockMap.done;
+          nextBlockMap = dirMaps.next()
+        ) {
+          blockMapAddress = nextBlockMap.value;
+        }
+
+        // need to create new block map
+        if (blocksInLastBlockMap === 0) {
+          const freeBlockMapId = this.getFreeBlockId();
+          this.cleanBlock(freeBlockMapId);
+          this.setBlockUsed(freeBlockMapId);
+
+          const blockMapData = this.blockDevice.read(blockMapAddress);
+          blockMapData[blockMapData.length - 1] = freeBlockMapId;
+
+          let blockData = Buffer.alloc(BLOCK_SIZE);
+          blockData[0] = freeBlockId;
+
+          this.blockDevice.write(blockMapAddress, blockData);
+        } else {
+          let blockMapData = this.blockDevice.read(blockMapAddress);
+          blockMapData.writeInt8(freeBlockId, blocksInLastBlockMap);
+
+          this.blockDevice.write(blockMapAddress, blockMapData);
+        }
+      }
     }
 
-    // more logic...
+    directory.fileSize += 32;
+
+    let blockAddress = 0;
+    let dirBlocks = this.blocks(directory);
+
+    for (
+      let nextBlockAddress = dirBlocks.next();
+      !nextBlockAddress.done;
+      nextBlockAddress = dirBlocks.next()
+    ) {
+      blockAddress = nextBlockAddress.value;
+    }
+
+    let blockData = this.blockDevice.read(blockAddress);
+
+    const blockDataArr = Array.from(blockData);
+    blockDataArr.splice(dirEntryAddressInBlock * 32, 32, ...dirEntry.toBytes());
+    blockData = Buffer.from(blockDataArr);
+
+    this.blockDevice.write(blockAddress, blockData);
+
+    this.updateDescriptor(directoryDescriptorId, directory);
   }
 }
 
