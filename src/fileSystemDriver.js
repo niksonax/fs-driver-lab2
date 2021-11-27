@@ -14,6 +14,7 @@ import {
   BLOCK_COUNT_IN_BLOCK_MAP as blockCountInBLockMap,
   BLOCK_SIZE,
   DIR_ENTRIES_COUNT_IN_BLOCK as dirEntriesCountInBlock,
+  ZERO_BLOCK_ADDRESS,
 } from '../constants/constants.js';
 import { getInt32FromBytes, getInt32ToBytes } from '../helpers/helpers.js';
 import DirectoryEntry from './directoryEntry.js';
@@ -121,7 +122,7 @@ class FileSystemDriver {
     this.addLink(0, fileDescriptorId, name);
   }
 
-  open() {}
+  open(fileName) {}
 
   close(fd) {}
 
@@ -231,7 +232,101 @@ class FileSystemDriver {
     this.updateDescriptor(dirEntry.fileDescriptorId, fileDescriptor);
   }
 
-  truncate(fileName, fileSize) {}
+  truncate(fileName, fileSize) {
+    const fileDescriptorId = this.lookup(fileName);
+    const fileDescriptor = this.getDescriptor(fileDescriptorId);
+
+    let blockCount = Math.ceil(fileDescriptor.fileSize / BLOCK_SIZE);
+    const needBlockCount = Math.ceil(fileSize / BLOCK_SIZE);
+
+    if (blockCount === needBlockCount) {
+      fileDescriptor.fileSize = fileSize;
+      this.updateDescriptor(fileDescriptorId, fileDescriptor);
+
+      return;
+    } else if (blockCount < needBlockCount) {
+      if (blockCount === 0) {
+        fileDescriptor.blockAddress1 = ZERO_BLOCK_ADDRESS;
+        blockCount++;
+        if (blockCount == needBlockCount) {
+          fileDescriptor.fileSize = fileSize;
+          this.updateDescriptor(fileDescriptorId, fileDescriptor);
+
+          return;
+        }
+      }
+
+      if (blockCount === 1) {
+        fileDescriptor.blockAddress2 = ZERO_BLOCK_ADDRESS;
+        blockCount++;
+        if (blockCount == needBlockCount) {
+          fileDescriptor.fileSize = fileSize;
+          this.updateDescriptor(fileDescriptorId, fileDescriptor);
+
+          return;
+        }
+      }
+
+      if (fileDescriptor.blockMapAddress === 0) {
+        fileDescriptor.blockMapAddress = this.getFreeBlockId();
+        this.cleanBlock(fileDescriptor.blockMapAddress);
+      }
+
+      // if last block map is full
+      if (blockCount % blockCountInBLockMap === 0) {
+        // creating next block map
+        const lastBlockMapIndex = blockCount / blockCountInBLockMap - 1;
+        const blockMaps = this.blockMaps(fileDescriptor, lastBlockMapIndex);
+        const lastBlockMapAddress = blockMaps.next().value;
+        const blockMap = this.blockDevice.read(lastBlockMapAddress);
+
+        const newBlockMapAddress = this.getFreeBlockId();
+        this.cleanBlock(newBlockMapAddress);
+        blockMap[blockMap.length - 1] = newBlockMapAddress;
+
+        this.blockDevice.write(lastBlockMapAddress, blockMap);
+      }
+
+      const lastBlockMapIndex = Math.ceil(blockCount / blockCountInBLockMap);
+      const blockMaps = this.blockMaps(fileDescriptor, lastBlockMapIndex);
+
+      for (
+        let nextBlockMap = blockMaps.next();
+        !nextBlockMap.done;
+        nextBlockMap = blockMaps.next()
+      ) {
+        const blockMapAddress = nextBlockMap.value;
+        const blockMap = this.blockDevice.read(blockMapAddress);
+
+        while (blockCount < needBlockCount) {
+          blockMap[blockCount % blockCountInBLockMap] = ZERO_BLOCK_ADDRESS;
+          blockCount++;
+
+          // if we reach the end of previous block map
+          if (
+            blockCount % blockCountInBLockMap === 0 &&
+            blockCount < needBlockCount
+          ) {
+            // creating next block map
+            const newBlockMapAddress = this.getFreeBlockId();
+            this.cleanBlock(newBlockMapAddress);
+            blockMap[blockMap.length - 1] = newBlockMapAddress;
+            break;
+          }
+        }
+
+        this.blockDevice.write(blockMapAddress, blockMap);
+      }
+
+      fileDescriptor.fileSize = fileSize;
+      this.updateDescriptor(fileDescriptorId, fileDescriptor);
+    } else if (blockCount > needBlockCount) {
+      // TODO: decrease file size
+
+      fileDescriptor.fileSize = fileSize;
+      this.updateDescriptor(fileDescriptorId, fileDescriptor);
+    }
+  }
 
   getDirectoryPath() {}
 
