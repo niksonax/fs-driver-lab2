@@ -1,5 +1,15 @@
 const BLOCK_SIZE = 256; // ^8
-
 const DEVICE_SIZE = 65536; // ^16
 
-export { BLOCK_SIZE, DEVICE_SIZE };
+const DIR_ENTRIES_COUNT_IN_BLOCK = 8;
+const BLOCK_COUNT_IN_BLOCK_MAP = 255;
+
+const ZERO_BLOCK_ADDRESS = 255; // max value in 1 byte memory
+
+export {
+  BLOCK_SIZE,
+  DEVICE_SIZE,
+  DIR_ENTRIES_COUNT_IN_BLOCK,
+  BLOCK_COUNT_IN_BLOCK_MAP,
+  ZERO_BLOCK_ADDRESS,
+};
