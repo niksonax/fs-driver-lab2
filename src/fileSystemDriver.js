@@ -23,6 +23,8 @@ import FileDescriptor, { TYPES } from './fileDescriptor.js';
 class FileSystemDriver {
   constructor(blockDevice) {
     this.blockDevice = blockDevice;
+    this.openFiles = {}; // key - numericFileDescriptor, value - fileDescriptorId
+    this.numericFileDescriptor = 0; // numericFileDescriptor for last opened file
   }
 
   mkfs(n) {
@@ -122,13 +124,60 @@ class FileSystemDriver {
     this.addLink(0, fileDescriptorId, name);
   }
 
-  open(fileName) {}
+  open(fileName) {
+    const fileDescriptorId = this.lookup(fileName);
+    const numericFileDescriptor = this.numericFileDescriptor++;
+    this.openFiles[numericFileDescriptor] = fileDescriptorId;
 
-  close(fd) {}
+    return numericFileDescriptor;
+  }
 
-  read(fd, offset, size) {}
+  close(numericFileDescriptor) {
+    delete this.openFiles[numericFileDescriptor];
+  }
 
-  write(fd, offset, size, data) {}
+  read(numericFileDescriptor, offset, size) {
+    const fileDescriptorId = this.openFiles[numericFileDescriptor];
+    const fileDescriptor = this.getDescriptor(fileDescriptorId);
+
+    const startBlockIndex = Math.floor(offset / BLOCK_SIZE);
+    const endBlockIndex = Math.floor((offset + size) / BLOCK_SIZE);
+
+    const blocks = this.blocks(
+      fileDescriptor,
+      startBlockIndex,
+      endBlockIndex + 1
+    );
+
+    const buffer = Buffer.alloc(
+      (endBlockIndex - startBlockIndex + 1) * BLOCK_SIZE
+    );
+
+    let writtenBytes = 0;
+
+    for (
+      let nextBlock = blocks.next();
+      !nextBlock.done;
+      nextBlock = blocks.next()
+    ) {
+      const blockAddress = nextBlock.value;
+      let block =
+        blockAddress === ZERO_BLOCK_ADDRESS
+          ? Buffer.alloc(BLOCK_SIZE)
+          : this.blockDevice.read(blockAddress);
+
+      buffer.set(block, writtenBytes);
+
+      writtenBytes += block.length;
+    }
+
+    const extraFirstBytes = offset % BLOCK_SIZE;
+    const extraLastBytes = BLOCK_SIZE - ((offset + size) % BLOCK_SIZE);
+
+    return buffer.subarray(extraFirstBytes, buffer.length - extraLastBytes);
+  }
+
+  write(numericFileDescriptor, offset, size, data) {}
 
   link(fileName1, fileName2) {
     const fileDescriptorId = this.lookup(fileName1);
@@ -411,20 +460,26 @@ class FileSystemDriver {
     throw new Error('File not found');
   }
 
-  *blocks(fileDescriptor, startIndex = 0) {
+  *blocks(fileDescriptor, startIndex = 0, endIndex = Infinity) {
     let index = 0;
+
+    if (startIndex >= endIndex) {
+      throw new Error('End index must be bigger than start index.');
+    }
 
     if (fileDescriptor.blockAddress1 === 0) return;
     if (index >= startIndex) {
       yield fileDescriptor.blockAddress1;
     }
     index++;
+    if (index >= endIndex) return;
 
     if (fileDescriptor.blockAddress2 === 0) return;
     if (index >= startIndex) {
       yield fileDescriptor.blockAddress2;
     }
     index++;
+    if (index >= endIndex) return;
 
     let blockMapAddress = fileDescriptor.blockMapAddress;
 
@@ -438,6 +493,7 @@ class FileSystemDriver {
           yield blockMap[i];
         }
         index++;
+        if (index >= endIndex) return;
       }
 
       blockMapAddress = blockMap[blockMap.length - 1];
