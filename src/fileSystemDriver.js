@@ -10,7 +10,11 @@
 // blockAddress2  | 1 byte
 // blockMapAddress| 1 byte
 
-import { BLOCK_SIZE } from '../constants/constants.js';
+import {
+  BLOCK_COUNT_IN_BLOCK_MAP as blockCountInBLockMap,
+  BLOCK_SIZE,
+  DIR_ENTRIES_COUNT_IN_BLOCK as dirEntriesCountInBlock,
+} from '../constants/constants.js';
 import { getInt32FromBytes, getInt32ToBytes } from '../helpers/helpers.js';
 import DirectoryEntry from './directoryEntry.js';
 import FileDescriptor, { TYPES } from './fileDescriptor.js';
@@ -125,11 +129,109 @@ class FileSystemDriver {
 
   write(fd, offset, size, data) {}
 
-  link(name1, name2) {}
+  link(fileName1, fileName2) {
+    const fileDescriptorId = this.lookup(fileName1);
+    this.addLink(0, fileDescriptorId, fileName2); // root directory (id = 0)
+  }
 
-  unlink(name) {}
+  unlink(fileName) {
+    const directoryDescriptorId = 0; // root directory (id = 0)
+    const directory = this.root();
 
-  truncate(name, size) {}
+    const dirEntries = this.ls(directory);
+    const dirEntryIndex = dirEntries.findIndex(
+      (dirEntry) => dirEntry.name === fileName
+    );
+    const dirEntry = dirEntries.find((dirEntry) => dirEntry.name == fileName);
+
+    dirEntries.splice(dirEntryIndex, 1);
+
+    const dirEntryBlockId = Math.floor(dirEntryIndex / 8);
+    const dirBlocks = this.blocks(directory, dirEntryBlockId);
+    let updatedBlocksCount = 0;
+
+    for (
+      let nextBlockAddress = dirBlocks.next();
+      !nextBlockAddress.done;
+      nextBlockAddress = dirBlocks.next()
+    ) {
+      const buffer = Buffer.alloc(BLOCK_SIZE);
+
+      for (
+        let i = 0;
+        i < Math.min(8, dirEntries.length - updatedBlocksCount * 8);
+        i++
+      ) {
+        console.log(dirEntries[updatedBlocksCount * 8 + i]);
+        buffer.set(dirEntries[updatedBlocksCount * 8 + i].toBytes(), i * 32);
+      }
+
+      this.blockDevice.write(nextBlockAddress.value, buffer);
+
+      updatedBlocksCount++;
+    }
+
+    // need to remove last block map
+    const lastBlockIndex = Math.floor(
+      (dirEntries.length - 2) / dirEntriesCountInBlock
+    );
+    const needToRemoveLastBlockMap = !(lastBlockIndex % blockCountInBLockMap);
+
+    if (needToRemoveLastBlockMap) {
+      const blockIndex = Math.floor(
+        (dirEntryIndex - 2) / dirEntriesCountInBlock
+      );
+      const blockMapIndex = Math.floor(blockIndex / blockCountInBLockMap);
+
+      if (blockMapIndex === 0) {
+        this.freeBlockMap(directory.blockMapAddress);
+        directory.blockMapAddress = 0;
+        this.updateDescriptor(directoryDescriptorId, directory);
+      } else {
+        const blockMaps = this.blockMaps(directory, blockMapIndex - 1);
+        const prevBlockMapAddress = blockMaps.next().value;
+        const blockMapAddress = blockMaps.next().value;
+
+        this.freeBlockMap(blockMapAddress, prevBlockMapAddress);
+      }
+    } else if ((dirEntries.length - 2) % blockCountInBLockMap === 0) {
+      // remove last block
+      const blockIndex = Math.floor(
+        (dirEntries.length - 2) / blockCountInBLockMap
+      );
+      const blockMapIndex = Math.floor(blockIndex / blockCountInBLockMap);
+      const blockIndexInBlockMap = blockIndex % blockCountInBLockMap;
+
+      const buffer = this.blockDevice.read(blockMapIndex);
+      this.setBlockUnused(buffer[blockIndexInBlockMap]);
+      const arr = Array.from(buffer);
+      arr.splice(blockIndexInBlockMap, 1);
+      arr.push(arr[arr.length - 1]); // link on the next block map
+      arr[arr.length - 2] = 0;
+
+      this.blockDevice.write(blockMapIndex, Buffer.from(arr));
+    } else if (dirEntries.length === dirEntriesCountInBlock) {
+      this.setBlockUnused(directory.blockAddress2);
+      directory.blockAddress2 = 0;
+    } else if (dirEntries.length === 0) {
+      this.setBlockUnused(directory.blockAddress1);
+      directory.blockAddress1 = 0;
+    }
+
+    directory.fileSize -= 32;
+    this.updateDescriptor(directoryDescriptorId, directory);
+
+    const fileDescriptor = this.getDescriptor(dirEntry.fileDescriptorId);
+    fileDescriptor.hardLinksCount -= 1;
+
+    if (fileDescriptor.hardLinksCount === 0) {
+      fileDescriptor.fileType = TYPES.UNUSED;
+    }
+
+    this.updateDescriptor(dirEntry.fileDescriptorId, fileDescriptor);
+  }
+
+  truncate(fileName, fileSize) {}
 
   getDirectoryPath() {}
 
@@ -202,11 +304,32 @@ class FileSystemDriver {
     return this.getDescriptor(0);
   }
 
-  *blocks(fileDescriptor) {
+  lookup(fileName) {
+    const dirEntries = this.ls(this.root());
+
+    for (let dirEntry of dirEntries) {
+      if (dirEntry.name === fileName) {
+        return dirEntry.fileDescriptorId;
+      }
+    }
+
+    throw new Error('File not found');
+  }
+
+  *blocks(fileDescriptor, startIndex = 0) {
+    let index = 0;
+
     if (fileDescriptor.blockAddress1 === 0) return;
-    yield fileDescriptor.blockAddress1;
+    if (index >= startIndex) {
+      yield fileDescriptor.blockAddress1;
+    }
+    index++;
+
     if (fileDescriptor.blockAddress2 === 0) return;
-    yield fileDescriptor.blockAddress2;
+    if (index >= startIndex) {
+      yield fileDescriptor.blockAddress2;
+    }
+    index++;
 
     let blockMapAddress = fileDescriptor.blockMapAddress;
 
@@ -216,22 +339,30 @@ class FileSystemDriver {
       for (let i = 0; i < blockMap.length - 1; i++) {
         if (blockMap[i] === 0) return;
 
-        yield blockMap[i];
+        if (index >= startIndex) {
+          yield blockMap[i];
+        }
+        index++;
       }
 
       blockMapAddress = blockMap[blockMap.length - 1];
     }
   }
 
-  *blockMaps(fileDescriptor) {
+  *blockMaps(fileDescriptor, startIndex = 0) {
     let blockMapAddress = fileDescriptor.blockMapAddress;
+    let index = 0;
 
     while (blockMapAddress) {
-      yield blockMapAddress;
+      if (index >= startIndex) {
+        yield blockMapAddress;
+      }
 
       const blockMap = this.blockDevice.read(blockMapAddress);
 
       blockMapAddress = blockMap[blockMap.length - 1];
+
+      index++;
     }
   }
 
@@ -280,6 +411,24 @@ class FileSystemDriver {
   cleanBlock(blockId) {
     const cleanBlock = Buffer.alloc(BLOCK_SIZE);
     this.blockDevice.write(blockId, cleanBlock);
+  }
+
+  freeBlockMap(blockMapAddress, prevBlockMapAddress) {
+    const blockMap = this.blockDevice.read(blockMapAddress);
+
+    for (let blockAddress of blockMap) {
+      if (blockAddress === 0) break;
+
+      this.setBlockUnused(blockAddress);
+    }
+
+    if (prevBlockMapAddress) {
+      const prevBlockMap = this.blockDevice.read(prevBlockMapAddress);
+
+      prevBlockMap[prevBlockMap.length - 1] = 0;
+
+      this.blockDevice.write(prevBlockMapAddress, prevBlockMap);
+    }
   }
 
   addLink(directoryDescriptorId, fileDescriptorId, fileName) {
@@ -382,6 +531,10 @@ class FileSystemDriver {
     this.blockDevice.write(blockAddress, blockData);
 
     this.updateDescriptor(directoryDescriptorId, directory);
+
+    const fileDescriptor = this.getDescriptor(fileDescriptorId);
+    fileDescriptor.hardLinksCount++;
+    this.updateDescriptor(fileDescriptorId, fileDescriptor);
   }
 }
 
