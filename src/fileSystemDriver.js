@@ -177,7 +177,66 @@ class FileSystemDriver {
     return buffer.subarray(extraFirstBytes, buffer.length - extraLastBytes);
   }
 
-  write(numericFileDescriptor, offset, size, data) {}
+  write(numericFileDescriptor, offset, data) {
+    const fileDescriptorId = this.openFiles[numericFileDescriptor];
+    const fileDescriptor = this.getDescriptor(fileDescriptorId);
+
+    const startBlockIndex = Math.floor(offset / BLOCK_SIZE);
+    let startBlockOffset = offset % BLOCK_SIZE;
+
+    const blocks = this.blocks(fileDescriptor, startBlockIndex);
+    const blockMaps = [...this.blockMaps(fileDescriptor)];
+
+    let writtenBytes = 0;
+    let blockIndex = startBlockIndex;
+
+    for (let blockAddress of blocks) {
+      if (blockAddress === ZERO_BLOCK_ADDRESS) {
+        const freeBlockId = this.getFreeBlockId();
+        this.cleanBlock(freeBlockId);
+        this.setBlockUsed(freeBlockId);
+
+        blockAddress = freeBlockId;
+
+        if (blockIndex === 0) {
+          fileDescriptor.blockAddress1 = freeBlockId;
+          this.updateDescriptor(fileDescriptorId, fileDescriptor);
+        } else if (blockIndex === 1) {
+          fileDescriptor.blockAddress2 = freeBlockId;
+          this.updateDescriptor(fileDescriptorId, fileDescriptor);
+        } else {
+          const blockMapIndex = Math.floor(
+            (blockIndex - 2) / blockCountInBLockMap
+          );
+          const blockMapAddress = blockMaps[blockMapIndex];
+
+          const blockMap = this.blockDevice.read(blockMapAddress);
+          blockMap.writeInt8(
+            freeBlockId,
+            (blockIndex - 2) % blockCountInBLockMap
+          );
+
+          this.blockDevice.write(blockMapAddress, blockMap);
+        }
+      }
+      const blockData = this.blockDevice.read(blockAddress);
+      blockData.set(
+        data.subarray(writtenBytes, writtenBytes + BLOCK_SIZE),
+        startBlockOffset
+      );
+
+      startBlockOffset = 0;
+      writtenBytes += BLOCK_SIZE;
+
+      blockIndex++;
+
+      this.blockDevice.write(blockAddress, blockData);
+
+      if (writtenBytes >= (offset % BLOCK_SIZE) + data.length) {
+        break;
+      }
+    }
+  }
 
   link(fileName1, fileName2) {
     const fileDescriptorId = this.lookup(fileName1);
