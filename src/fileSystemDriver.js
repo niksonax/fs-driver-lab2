@@ -414,6 +414,27 @@ class FileSystemDriver {
       this.updateDescriptor(fileDescriptorId, fileDescriptor);
     } else if (blockCount > needBlockCount) {
       // TODO: decrease file size
+      const blockMaps = [...this.blockMaps(fileDescriptor)];
+      let needToFree = blockCount - needBlockCount;
+
+      while (needToFree > BLOCK_SIZE * BLOCKS_IN_BLOCK_MAP) {
+        this.freeBlockMap(blockMaps.pop());
+        needToFree -= BLOCKS_IN_BLOCK_MAP;
+      }
+
+      if (needToFree > 0) {
+        if (blockMaps.length) {
+          // TODO: clean blocks of the last block map
+        } else {
+          fileDescriptor.blockAddress2 = 0;
+          needToFree--;
+
+          if (needToFree) fileDescriptor.blockAddress1 = 0;
+
+          this.updateDescriptor(fileDescriptorId, fileDescriptor);
+        }
+      }
+      // need to null bytes of the last block
 
       fileDescriptor.fileSize = fileSize;
       this.updateDescriptor(fileDescriptorId, fileDescriptor);
