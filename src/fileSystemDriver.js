@@ -79,12 +79,12 @@ class FileSystemDriver {
   fstat(id) {}
 
   ls(directory) {
-    const blocks = this.blocks(directory);
-
     const dirEntries = [];
 
-    for (let block = blocks.next(); !block.done; block = blocks.next()) {
-      const blockData = this.blockDevice.read(block.value);
+    const blocks = this.blocks(directory);
+
+    for (let blockAddress of blocks) {
+      const blockData = this.blockDevice.read(blockAddress);
 
       for (let i = 0; i < BLOCK_SIZE / 32; i++) {
         const dirEntry = new DirectoryEntry();
@@ -155,12 +155,7 @@ class FileSystemDriver {
 
     let writtenBytes = 0;
 
-    for (
-      let nextBlock = blocks.next();
-      !nextBlock.done;
-      nextBlock = blocks.next()
-    ) {
-      const blockAddress = nextBlock.value;
+    for (let blockAddress of blocks) {
       let block =
         blockAddress === ZERO_BLOCK_ADDRESS
           ? Buffer.alloc(BLOCK_SIZE)
@@ -257,13 +252,10 @@ class FileSystemDriver {
 
     const dirEntryBlockId = Math.floor(dirEntryIndex / 8);
     const dirBlocks = this.blocks(directory, dirEntryBlockId);
+
     let updatedBlocksCount = 0;
 
-    for (
-      let nextBlockAddress = dirBlocks.next();
-      !nextBlockAddress.done;
-      nextBlockAddress = dirBlocks.next()
-    ) {
+    for (let blockAddress of dirBlocks) {
       const buffer = Buffer.alloc(BLOCK_SIZE);
 
       for (
@@ -271,16 +263,15 @@ class FileSystemDriver {
         i < Math.min(8, dirEntries.length - updatedBlocksCount * 8);
         i++
       ) {
-        console.log(dirEntries[updatedBlocksCount * 8 + i]);
         buffer.set(dirEntries[updatedBlocksCount * 8 + i].toBytes(), i * 32);
       }
 
-      this.blockDevice.write(nextBlockAddress.value, buffer);
+      this.blockDevice.write(blockAddress, buffer);
 
       updatedBlocksCount++;
     }
 
-    // need to remove last block map
+    // Removing last block map
     const lastBlockIndex = Math.floor(
       (dirEntries.length - 2) / dirEntriesCountInBlock
     );
@@ -304,7 +295,7 @@ class FileSystemDriver {
         this.freeBlockMap(blockMapAddress, prevBlockMapAddress);
       }
     } else if ((dirEntries.length - 2) % blockCountInBLockMap === 0) {
-      // remove last block
+      // Removing last block
       const blockIndex = Math.floor(
         (dirEntries.length - 2) / blockCountInBLockMap
       );
@@ -380,9 +371,9 @@ class FileSystemDriver {
         this.cleanBlock(fileDescriptor.blockMapAddress);
       }
 
-      // if last block map is full
+      // If last block map is full
       if (blockCount % blockCountInBLockMap === 0) {
-        // creating next block map
+        // Creating next block map
         const lastBlockMapIndex = blockCount / blockCountInBLockMap - 1;
         const blockMaps = this.blockMaps(fileDescriptor, lastBlockMapIndex);
         const lastBlockMapAddress = blockMaps.next().value;
@@ -398,24 +389,19 @@ class FileSystemDriver {
       const lastBlockMapIndex = Math.ceil(blockCount / blockCountInBLockMap);
       const blockMaps = this.blockMaps(fileDescriptor, lastBlockMapIndex);
 
-      for (
-        let nextBlockMap = blockMaps.next();
-        !nextBlockMap.done;
-        nextBlockMap = blockMaps.next()
-      ) {
-        const blockMapAddress = nextBlockMap.value;
+      for (let blockMapAddress of blockMaps) {
         const blockMap = this.blockDevice.read(blockMapAddress);
 
         while (blockCount < needBlockCount) {
           blockMap[blockCount % blockCountInBLockMap] = ZERO_BLOCK_ADDRESS;
           blockCount++;
 
-          // if we reach the end of previous block map
+          // If we reach the end of previous block map
           if (
             blockCount % blockCountInBLockMap === 0 &&
             blockCount < needBlockCount
           ) {
-            // creating next block map
+            // Creating next block map
             const newBlockMapAddress = this.getFreeBlockId();
             this.cleanBlock(newBlockMapAddress);
             blockMap[blockMap.length - 1] = newBlockMapAddress;
@@ -686,18 +672,10 @@ class FileSystemDriver {
         const blockMapsCount = Math.ceil((blocksInDirCount - 2) / 255);
         const blocksInLastBlockMap = (blocksInDirCount - 2) % 255;
 
-        let blockMapAddress = 0;
-        let dirMaps = this.blockMaps(directory);
+        let dirMaps = [...this.blockMaps(directory)];
+        let blockMapAddress = dirMaps[dirMaps.length - 1];
 
-        for (
-          let nextBlockMap = dirMaps.next();
-          !nextBlockMap.done;
-          nextBlockMap = dirMaps.next()
-        ) {
-          blockMapAddress = nextBlockMap.value;
-        }
-
-        // need to create new block map
+        // Creating new block map
         if (blocksInLastBlockMap === 0) {
           const freeBlockMapId = this.getFreeBlockId();
           this.cleanBlock(freeBlockMapId);
@@ -721,17 +699,8 @@ class FileSystemDriver {
 
     directory.fileSize += 32;
 
-    let blockAddress = 0;
-    let dirBlocks = this.blocks(directory);
-
-    for (
-      let nextBlockAddress = dirBlocks.next();
-      !nextBlockAddress.done;
-      nextBlockAddress = dirBlocks.next()
-    ) {
-      blockAddress = nextBlockAddress.value;
-    }
-
+    let dirBlocks = [...this.blocks(directory)];
+    let blockAddress = dirBlocks[dirBlocks.length - 1];
     let blockData = this.blockDevice.read(blockAddress);
 
     const blockDataArr = Array.from(blockData);
