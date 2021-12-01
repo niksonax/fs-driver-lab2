@@ -5,7 +5,7 @@ describe('FileSystemDriver', () => {
   let driver;
 
   beforeEach(() => {
-    let device = new BlockDevice('test.txt');
+    let device = new BlockDevice('blockDevice.txt');
     driver = new FileSystemDriver(device);
     driver.mkfs(500);
   });
