@@ -72,11 +72,9 @@ class FileSystemDriver {
     }
   }
 
-  mount() {}
+  mount() {} // class constructor = mount()
 
   unmount() {}
-
-  fstat(id) {}
 
   ls(directory) {
     const dirEntries = [];
