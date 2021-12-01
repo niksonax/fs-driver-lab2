@@ -1,11 +1,18 @@
 import BlockDevice from './src/blockDevice.js';
-import FileDescriptor from './src/fileDescriptor.js';
 import FileSystemDriver from './src/fileSystemDriver.js';
 
 const blockDevice = new BlockDevice('test.txt');
-const fsDriver = new FileSystemDriver(blockDevice);
+const driver = new FileSystemDriver(blockDevice);
 
-fsDriver.mkfs(10);
-console.log(fsDriver.ls(fsDriver.root()));
-fsDriver.create('abc');
-console.log(fsDriver.ls(fsDriver.root()));
+driver.mkfs(100);
+
+const fileName = 'test';
+const fileSize = 30;
+driver.create(fileName);
+
+driver.truncate(fileName, fileSize);
+const numericFileDescriptor = driver.open(fileName);
+
+const data = driver.read(numericFileDescriptor, 0, fileSize);
+
+// All further tests are in __tests__ folder
