@@ -1,7 +1,7 @@
 import BlockDevice from './src/blockDevice.js';
 import FileSystemDriver from './src/fileSystemDriver.js';
 
-const blockDevice = new BlockDevice('test.txt');
+const blockDevice = new BlockDevice('blockDevice.txt');
 const driver = new FileSystemDriver(blockDevice);
 
 driver.mkfs(100);
