@@ -117,6 +117,9 @@ class FileSystemDriver {
 
     fileDescriptor.fileSize = 0;
     fileDescriptor.fileType = TYPES.REGULAR;
+    fileDescriptor.blockAddress1 = 0;
+    fileDescriptor.blockAddress2 = 0;
+    fileDescriptor.blockMapAddress = 0;
     fileDescriptor.hardLinksCount = 0;
 
     this.updateDescriptor(fileDescriptorId, fileDescriptor);
@@ -336,7 +339,7 @@ class FileSystemDriver {
     let blockCount = Math.ceil(fileDescriptor.fileSize / BLOCK_SIZE);
     const needBlockCount = Math.ceil(fileSize / BLOCK_SIZE);
 
-    if (blockCount === needBlockCount) {
+    if (blockCount === needBlockCount && fileDescriptor.fileSize < fileSize) {
       fileDescriptor.fileSize = fileSize;
       this.updateDescriptor(fileDescriptorId, fileDescriptor);
 
@@ -412,8 +415,8 @@ class FileSystemDriver {
 
       fileDescriptor.fileSize = fileSize;
       this.updateDescriptor(fileDescriptorId, fileDescriptor);
-    } else if (blockCount > needBlockCount) {
-      // TODO: decrease file size
+    } else if (fileDescriptor.fileSize > fileSize) {
+      // decreasing file size
       const blockMaps = [...this.blockMaps(fileDescriptor)];
       let needToFree = blockCount - needBlockCount;
 
@@ -424,7 +427,30 @@ class FileSystemDriver {
 
       if (needToFree > 0) {
         if (blockMaps.length) {
-          // TODO: clean blocks of the last block map
+          // cleaning blocks of the last block map
+          const lastBlockMapAddress = blockMaps[blockMaps.length - 1];
+          const lastBlockMapData = this.blockDevice.read(lastBlockMapAddress);
+          const blocksInLastBlockMap = (blockCount - 2) % BLOCKS_IN_BLOCK_MAP;
+
+          for (
+            let blockIndex = Math.min(blocksInLastBlockMap - needToFree, 0);
+            blockIndex < blocksInLastBlockMap;
+            blockIndex++
+          ) {
+            lastBlockMapData[blockIndex] = 0;
+            needToFree--;
+          }
+
+          this.blockDevice.write(lastBlockMapAddress, lastBlockMapData);
+
+          if (needToFree === 2) {
+            fileDescriptor.blockAddress2 = 0;
+            fileDescriptor.blockAddress1 = 0;
+            this.updateDescriptor(fileDescriptorId, fileDescriptor);
+          } else if (needToFree === 1) {
+            fileDescriptor.blockAddress2 = 0;
+            this.updateDescriptor(fileDescriptorId, fileDescriptor);
+          }
         } else {
           fileDescriptor.blockAddress2 = 0;
           needToFree--;
@@ -434,7 +460,25 @@ class FileSystemDriver {
           this.updateDescriptor(fileDescriptorId, fileDescriptor);
         }
       }
-      // need to null bytes of the last block
+      // nulling bytes of the last block
+      const needToFreeBytes = (fileDescriptor.fileSize - fileSize) % BLOCK_SIZE;
+
+      if (needToFreeBytes > 0) {
+        const blocks = [...this.blocks(fileDescriptor)];
+        const lastBlockAddress = blocks[blocks.length - 1];
+        const lastBlockData = this.blockDevice.read(lastBlockAddress);
+
+        for (
+          let byteIndex =
+            (fileDescriptor.fileSize % BLOCK_SIZE) - needToFreeBytes;
+          byteIndex < fileDescriptor.fileSize % BLOCK_SIZE;
+          byteIndex++
+        ) {
+          lastBlockData[byteIndex] = 0;
+        }
+
+        this.blockDevice.write(lastBlockAddress, lastBlockData);
+      }
 
       fileDescriptor.fileSize = fileSize;
       this.updateDescriptor(fileDescriptorId, fileDescriptor);

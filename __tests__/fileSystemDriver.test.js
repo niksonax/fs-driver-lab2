@@ -114,7 +114,26 @@ describe('FileSystemDriver', () => {
     expect(fileDescriptor.fileSize).toBe(fileSize);
   });
 
-  // TODO: test for decrease
+  test('should null all unused bytes after decreasing size', () => {
+    const fileName = 'test';
+    const fileSize = 30;
+    const newFileSize = 20;
+    driver.create(fileName);
+
+    driver.truncate(fileName, fileSize);
+    const numericFileDescriptor = driver.open(fileName);
+    driver.write(numericFileDescriptor, 0, Buffer.alloc(fileSize, 1));
+    driver.truncate(fileName, newFileSize);
+
+    driver.truncate(fileName, fileSize);
+    const data = driver.read(numericFileDescriptor, 0, fileSize);
+    const expectedData = Buffer.alloc(fileSize);
+    for (let i = 0; i < newFileSize; i++) {
+      expectedData[i] = 1;
+    }
+
+    expect(data).toEqual(expectedData);
+  });
 
   test('should set new bytes in 0 after increasing file size', () => {
     const fileName = 'test';
