@@ -1,6 +1,6 @@
 # File system driver
 
-File system driver for block type data storage device developed for my *system programming* course.
+File system driver for block type data storage device developed for my *system programming* course. A file ``blockDevice.txt`` acts as a block type device.
 
 ## Installation
 
